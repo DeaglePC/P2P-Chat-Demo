@@ -15,13 +15,13 @@ import (
 const (
 	OK   = "OK"
 	Fail = "FAIL"
+
+	PunchMsg = "#hello#"
 )
 
 var (
 	LocalAddr  = flag.String("laddr", "127.0.0.1:10001", "local addr: ip:port")
 	ServerAddr = flag.String("raddr", "127.0.0.1:10086", "server addr: ip:port")
-	//Name       = flag.String("name", "tom", "your name")
-	//PeerID     = flag.Int("pid", 1, "target client ID")
 )
 
 func init() {
@@ -42,14 +42,51 @@ type ChatClient struct {
 	name       string
 	serverConn net.Conn       // 跟p2p服务器的链接
 	peerConn   net.PacketConn // 跟对方客户端的链接
-	peerAddr   string         // 对方客户端的地址：ip:port
+	peerAddr   *net.UDPAddr   // 对方客户端的地址：ip:port
 
 	serverRecvChan chan *ServerResponse
-	punchChan      chan string // addr
+	punchChan      chan *net.UDPAddr // addr
 }
 
 func (c *ChatClient) Destroy() {
 	close(c.punchChan)
+	c.peerConn.Close()
+	c.serverConn.Close()
+}
+
+func (c *ChatClient) init() error {
+	c.serverRecvChan = make(chan *ServerResponse)
+	c.punchChan = make(chan *net.UDPAddr)
+	return c.initConn()
+}
+
+func (c *ChatClient) initConn() error {
+	if err := c.dial(); err != nil {
+		return err
+	}
+	return c.listenPeer()
+}
+
+func (c *ChatClient) recvPeerMsgLoop() {
+	b := make([]byte, 1024)
+
+	for {
+		n, addr, err := c.peerConn.ReadFrom(b)
+		if err != nil {
+			fmt.Printf("read from peer error: %+v\n", err)
+			break
+		}
+		fmt.Printf("[%s] %s\n", addr, b[:n])
+	}
+}
+
+func (c *ChatClient) sendToPeer(addr net.Addr, msg string) error {
+	b := []byte(msg)
+	n, err := c.peerConn.WriteTo(b, addr)
+	if err != nil || n != len(b) {
+		return err
+	}
+	return nil
 }
 
 func (c *ChatClient) dial() (err error) {
@@ -105,26 +142,43 @@ func tryParsePunchMsg(b []byte) (bool, string) {
 	return false, ""
 }
 
+// 客户端之间的连接
+func (c *ChatClient) listenPeer() (err error) {
+	c.peerConn, err = reuseport.ListenPacket("udp", c.LocalAddr)
+	return
+}
+
 // recvPunchLoop 接收来自p2p server的打洞请求
 func (c *ChatClient) recvPunchLoop() {
 	for addr := range c.punchChan {
 		fmt.Printf("do punch addr: %s\n", addr)
-		// TODO send punch hello
+		if err := c.sendToPeer(addr, PunchMsg); err != nil {
+			fmt.Printf("send to peer error: %+v\n", err)
+		}
+		fmt.Printf("send punch hello to %s OK\n", addr)
 	}
 }
 
 func (c *ChatClient) recvServerLoop() {
+	defer close(c.serverRecvChan)
+	defer close(c.punchChan)
+
 	for {
 		data, err := c.readFromServer()
 		if err != nil {
 			fmt.Printf("readFromServer err: %+v\n", err)
+			break
 		}
 		fmt.Printf("recv from server: %s\n", data)
 
 		// 看看是不是打洞消息
 		isPunch, addr := tryParsePunchMsg(data)
 		if isPunch {
-			c.punchChan <- addr
+			udpAddr, err := net.ResolveUDPAddr("udp", addr)
+			if err != nil {
+				continue
+			}
+			c.punchChan <- udpAddr
 			continue
 		}
 
@@ -214,7 +268,12 @@ func (c *ChatClient) doGet(peerID int) error {
 	if resp == nil || !resp.Result {
 		return fmt.Errorf("get fail: %s, try again", resp.Data)
 	}
-	c.peerAddr = resp.Data
+
+	addr, err := net.ResolveUDPAddr("udp", resp.Data)
+	if err != nil {
+		return fmt.Errorf("resolve addr fail: %+v", err)
+	}
+	c.peerAddr = addr
 	return nil
 }
 
@@ -223,7 +282,7 @@ func (c *ChatClient) punch(targetID int) error {
 }
 
 func (c *ChatClient) doPunch(targetID int) error {
-	if len(c.peerAddr) == 0 {
+	if c.peerAddr == nil {
 		return fmt.Errorf("not get peer addr now")
 	}
 
@@ -238,8 +297,8 @@ func (c *ChatClient) doPunch(targetID int) error {
 		return fmt.Errorf("punch fail: %s, try again", resp.Data)
 	}
 
-	// TODO send punch hello
-	return nil
+	// TODO send punch hello until ok
+	return c.sendToPeer(c.peerAddr, PunchMsg)
 }
 
 func parseInput(text string) (cmd string, args []string) {
@@ -316,12 +375,12 @@ func (c *ChatClient) scan() {
 }
 
 func (c *ChatClient) Run() (err error) {
-	if err = c.dial(); err != nil {
-		return
+	if err := c.init(); err != nil {
+		return err
 	}
 	go c.recvServerLoop()
 	go c.recvPunchLoop()
-	// TODO listen same udp port
+	go c.recvPeerMsgLoop()
 
 	c.scan()
 	return nil
@@ -329,10 +388,8 @@ func (c *ChatClient) Run() (err error) {
 
 func main() {
 	c := ChatClient{
-		LocalAddr:      *LocalAddr,
-		ServerAddr:     *ServerAddr,
-		serverRecvChan: make(chan *ServerResponse),
-		punchChan:      make(chan string),
+		LocalAddr:  *LocalAddr,
+		ServerAddr: *ServerAddr,
 	}
 	if err := c.Run(); err != nil {
 		panic(err)
