@@ -16,7 +16,8 @@ const (
 	OK   = "OK"
 	Fail = "FAIL"
 
-	PunchMsg = "#hello#"
+	PunchMsg   = "#hello#" // 主动
+	PunchReply = "$world$" // 回复
 )
 
 var (
@@ -26,6 +27,11 @@ var (
 
 func init() {
 	flag.Parse()
+}
+
+type PunchPeerInfo struct {
+	IsDone  bool
+	UDPAddr *net.UDPAddr
 }
 
 type ServerResponse struct {
@@ -42,10 +48,14 @@ type ChatClient struct {
 	name       string
 	serverConn net.Conn       // 跟p2p服务器的链接
 	peerConn   net.PacketConn // 跟对方客户端的链接
-	peerAddr   *net.UDPAddr   // 对方客户端的地址：ip:port
 
 	serverRecvChan chan *ServerResponse
 	punchChan      chan *net.UDPAddr // addr
+
+	targetsInfo      map[int]string            // id -> addr
+	punchTargetsInfo map[string]*PunchPeerInfo // 主动要打洞的地址信息和状态
+
+	wantPunchPeersInfo map[string]*PunchPeerInfo // 被动打洞地址信息和状态
 }
 
 func (c *ChatClient) Destroy() {
@@ -57,6 +67,10 @@ func (c *ChatClient) Destroy() {
 func (c *ChatClient) init() error {
 	c.serverRecvChan = make(chan *ServerResponse)
 	c.punchChan = make(chan *net.UDPAddr)
+	c.targetsInfo = make(map[int]string)
+	c.punchTargetsInfo = make(map[string]*PunchPeerInfo)
+	c.wantPunchPeersInfo = make(map[string]*PunchPeerInfo)
+
 	return c.initConn()
 }
 
@@ -76,7 +90,24 @@ func (c *ChatClient) recvPeerMsgLoop() {
 			fmt.Printf("read from peer error: %+v\n", err)
 			break
 		}
-		fmt.Printf("[%s] %s\n", addr, b[:n])
+
+		msg := string(b[:n])
+		fmt.Printf("recv from peer [%s] %s\n", addr, msg)
+		if msg == PunchReply {
+			// 主动打洞，收到了回复，说明打洞成功了
+			fmt.Printf("[%s] udp hole punch success!\n", addr)
+			if _, ok := c.punchTargetsInfo[addr.String()]; ok {
+				c.punchTargetsInfo[addr.String()].IsDone = true
+			} else {
+				fmt.Printf("bad punch reply, addr %s not found\n", addr)
+			}
+			continue
+		}
+		if msg == PunchMsg {
+			// 被动打洞，收到打洞者发来的消息，说明被打洞成功了
+			c.wantPunchPeersInfo[addr.String()].IsDone = true
+			fmt.Printf("被动打洞，收到了 %s hello\n", addr)
+		}
 	}
 }
 
@@ -142,7 +173,7 @@ func tryParsePunchMsg(b []byte) (bool, string) {
 	return false, ""
 }
 
-// 客户端之间的连接
+// listenPeer 客户端之间的连接
 func (c *ChatClient) listenPeer() (err error) {
 	c.peerConn, err = reuseport.ListenPacket("udp", c.LocalAddr)
 	return
@@ -152,10 +183,22 @@ func (c *ChatClient) listenPeer() (err error) {
 func (c *ChatClient) recvPunchLoop() {
 	for addr := range c.punchChan {
 		fmt.Printf("do punch addr: %s\n", addr)
-		if err := c.sendToPeer(addr, PunchMsg); err != nil {
-			fmt.Printf("send to peer error: %+v\n", err)
+
+		addr := addr
+		c.wantPunchPeersInfo[addr.String()] = &PunchPeerInfo{UDPAddr: addr}
+		// 需要主动发送打洞消息
+		for i := 0; i < 10; i++ {
+			if c.wantPunchPeersInfo[addr.String()].IsDone {
+				fmt.Printf("被动打洞还没发完10次就成功了 %s\n", addr)
+				break
+			}
+			fmt.Printf("send punch reply to %s OK\n", addr)
+			if err := c.sendToPeer(addr, PunchReply); err != nil {
+				fmt.Printf("send to peer error: %+v\n", err)
+				break
+			}
+			time.Sleep(time.Duration(100) * time.Millisecond)
 		}
-		fmt.Printf("send punch hello to %s OK\n", addr)
 	}
 }
 
@@ -273,7 +316,10 @@ func (c *ChatClient) doGet(peerID int) error {
 	if err != nil {
 		return fmt.Errorf("resolve addr fail: %+v", err)
 	}
-	c.peerAddr = addr
+
+	c.targetsInfo[peerID] = addr.String()
+	c.punchTargetsInfo[addr.String()] = &PunchPeerInfo{UDPAddr: addr}
+
 	return nil
 }
 
@@ -282,8 +328,9 @@ func (c *ChatClient) punch(targetID int) error {
 }
 
 func (c *ChatClient) doPunch(targetID int) error {
-	if c.peerAddr == nil {
-		return fmt.Errorf("not get peer addr now")
+	addr, ok := c.targetsInfo[targetID]
+	if !ok {
+		return fmt.Errorf("not get peer %d addr now", targetID)
 	}
 
 	if err := c.punch(targetID); err != nil {
@@ -297,8 +344,19 @@ func (c *ChatClient) doPunch(targetID int) error {
 		return fmt.Errorf("punch fail: %s, try again", resp.Data)
 	}
 
-	// TODO send punch hello until ok
-	return c.sendToPeer(c.peerAddr, PunchMsg)
+	for i := 0; i < 10; i++ {
+		if c.punchTargetsInfo[addr].IsDone {
+			fmt.Printf("%d %s getPunchDone when send punch\n", targetID, addr)
+			break
+		}
+		if err := c.sendToPeer(c.punchTargetsInfo[addr].UDPAddr, PunchMsg); err != nil {
+			return fmt.Errorf("send to peer fail: %+v\n", err)
+		}
+		time.Sleep(time.Duration(100) * time.Millisecond)
+	}
+	c.punchTargetsInfo[addr].IsDone = true
+	fmt.Printf("send all punch req, try again\n")
+	return nil
 }
 
 func parseInput(text string) (cmd string, args []string) {
@@ -349,7 +407,7 @@ func (c *ChatClient) scan() {
 				fmt.Printf("exec cmd error: %+v\n", err)
 				continue
 			}
-			fmt.Printf("get %d addr success, addr: %s\n", v, c.peerAddr)
+			fmt.Printf("get %d addr success, addr: %s\n", v, c.targetsInfo[v])
 		case "punch":
 			if len(args) != 1 {
 				fmt.Printf("bad punch cmd\n")
@@ -364,7 +422,7 @@ func (c *ChatClient) scan() {
 				fmt.Printf("exec cmd error: %+v\n", err)
 				continue
 			}
-			fmt.Printf("punch %d success, addr: %s\n", v, c.peerAddr)
+			fmt.Printf("punch %d success, addr: %s\n", v, c.targetsInfo[v])
 		case "":
 			continue
 		default:
