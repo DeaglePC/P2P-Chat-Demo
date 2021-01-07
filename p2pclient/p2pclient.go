@@ -24,10 +24,6 @@ var (
 	//NickName   = flag.String("name", "tom", "name")
 )
 
-func init() {
-	flag.Parse()
-}
-
 type PunchPeerInfo struct {
 	IsDone  bool
 	UDPAddr *net.UDPAddr
@@ -92,6 +88,7 @@ func (c *ChatClient) initConn() error {
 func (c *ChatClient) recvPeerMsgLoop() {
 	b := make([]byte, 1024)
 
+	log.Printf("start recv from peer")
 	for {
 		n, addr, err := c.peerConn.ReadFrom(b)
 		if err != nil {
@@ -118,6 +115,7 @@ func (c *ChatClient) recvPeerMsgLoop() {
 			continue
 		}
 
+		log.Printf("recv peer msg: <%s> %s", addr, msg)
 		// 普通消息
 		c.peerMsgChan <- &PeerMsg{
 			UDPAddr: addr,
@@ -132,6 +130,7 @@ func (c *ChatClient) sendToPeer(addr net.Addr, msg string) error {
 	if err != nil || n != len(b) {
 		return err
 	}
+	log.Printf("send to peer <%s> %s OK", addr, msg)
 	return nil
 }
 
@@ -372,36 +371,36 @@ func (c *ChatClient) ExecInput(text string) string {
 		if err := c.DoLogin(args[0]); err != nil {
 			return fmt.Sprintf("exec cmd error: %+v", err)
 		}
-		return fmt.Sprintf("login success, ID: %d\n", c.id)
+		return fmt.Sprintf("login success, ID: %d", c.id)
 	case "logout":
 		if err := c.DoLogout(); err != nil {
-			return fmt.Sprintf("exec cmd error: %+v\n", err)
+			return fmt.Sprintf("exec cmd error: %+v", err)
 		}
-		fmt.Printf("logout success\n")
+		fmt.Printf("logout success")
 	case "get":
 		if len(args) != 1 {
 			return "bad get cmd"
 		}
 		v, err := strconv.Atoi(args[0])
 		if err != nil {
-			return fmt.Sprintf("%s: bad id format, must be int\n", args[0])
+			return fmt.Sprintf("%s: bad id format, must be int", args[0])
 		}
 		if err := c.DoGet(v); err != nil {
-			return fmt.Sprintf("exec cmd error: %+v\n", err)
+			return fmt.Sprintf("exec cmd error: %+v", err)
 		}
-		return fmt.Sprintf("get %d addr success, addr: %s\n", v, c.targetsInfo[v])
+		return fmt.Sprintf("get %d addr success, addr: %s", v, c.targetsInfo[v])
 	case "punch":
 		if len(args) != 1 {
 			return "bad punch cmd"
 		}
 		v, err := strconv.Atoi(args[0])
 		if err != nil {
-			return fmt.Sprintf("%s: bad id format, must be int\n", args[0])
+			return fmt.Sprintf("%s: bad id format, must be int", args[0])
 		}
 		if err := c.DoPunch(v); err != nil {
-			return fmt.Sprintf("exec cmd error: %+v\n", err)
+			return fmt.Sprintf("exec cmd error: %+v", err)
 		}
-		return fmt.Sprintf("punch %d success, addr: %s\n", v, c.targetsInfo[v])
+		return fmt.Sprintf("punch %d success, addr: %s", v, c.targetsInfo[v])
 	default:
 		return "unknown cmd"
 	}

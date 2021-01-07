@@ -1,12 +1,15 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 )
 
-func init() {
-	logFile, err := os.OpenFile("./p2p-chat-client.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+var LogFile = flag.String("logfile", "./p2p-chat-client.log", "file path")
+
+func initLog() {
+	logFile, err := os.OpenFile(*LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		panic(err)
 	}
