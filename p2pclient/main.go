@@ -10,12 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"udpdemo/proto"
 )
 
 const (
-	OK   = "OK"
-	Fail = "FAIL"
-
 	PunchMsg   = "#hello#" // 主动
 	PunchReply = "$world$" // 回复
 )
@@ -34,12 +33,6 @@ type PunchPeerInfo struct {
 	UDPAddr *net.UDPAddr
 }
 
-type ServerResponse struct {
-	Cmd    string // login/logout/get/punch
-	Result bool   // OK->true/FAIL->false
-	Data   string
-}
-
 type ChatClient struct {
 	LocalAddr  string
 	ServerAddr string
@@ -49,7 +42,7 @@ type ChatClient struct {
 	serverConn net.Conn       // 跟p2p服务器的链接
 	peerConn   net.PacketConn // 跟对方客户端的链接
 
-	serverRecvChan chan *ServerResponse
+	serverRecvChan chan *proto.ServerResponse
 	punchChan      chan *net.UDPAddr // addr
 
 	targetsInfo      map[int]string            // id -> addr
@@ -65,7 +58,7 @@ func (c *ChatClient) Destroy() {
 }
 
 func (c *ChatClient) init() error {
-	c.serverRecvChan = make(chan *ServerResponse)
+	c.serverRecvChan = make(chan *proto.ServerResponse)
 	c.punchChan = make(chan *net.UDPAddr)
 	c.targetsInfo = make(map[int]string)
 	c.punchTargetsInfo = make(map[string]*PunchPeerInfo)
@@ -143,36 +136,6 @@ func (c *ChatClient) readFromServer() ([]byte, error) {
 	return b[:n], nil
 }
 
-func parseServerResponse(b []byte) (*ServerResponse, error) {
-	resp := string(b)
-	segs := strings.SplitN(resp, " ", 3)
-	if len(segs) < 2 {
-		return nil, fmt.Errorf("bad server response")
-	}
-	offset := len(segs[0]) + len(segs[1]) + 1
-	if len(resp) > offset {
-		offset++
-	}
-	return &ServerResponse{
-		Cmd:    segs[0],
-		Result: segs[1] == OK,
-		Data:   resp[offset:],
-	}, nil
-}
-
-// tryParsePunchMsg 尝试解析打洞消息，返回值： 是否打洞消息，打洞地址
-func tryParsePunchMsg(b []byte) (bool, string) {
-	resp := string(b)
-	segs := strings.Split(resp, " ")
-	if len(segs) != 2 {
-		return false, ""
-	}
-	if segs[0] == "getpunch" {
-		return true, segs[1]
-	}
-	return false, ""
-}
-
 // listenPeer 客户端之间的连接
 func (c *ChatClient) listenPeer() (err error) {
 	c.peerConn, err = reuseport.ListenPacket("udp", c.LocalAddr)
@@ -215,7 +178,7 @@ func (c *ChatClient) recvServerLoop() {
 		fmt.Printf("recv from server: %s\n", data)
 
 		// 看看是不是打洞消息
-		isPunch, addr := tryParsePunchMsg(data)
+		isPunch, addr := proto.TryParsePunchMsg(data)
 		if isPunch {
 			udpAddr, err := net.ResolveUDPAddr("udp", addr)
 			if err != nil {
@@ -226,7 +189,7 @@ func (c *ChatClient) recvServerLoop() {
 		}
 
 		// 普通控制消息
-		resp, err := parseServerResponse(data)
+		resp, err := proto.ParseServerResponse(data)
 		if err != nil {
 			fmt.Printf("parse server resp error: %+v\n", err)
 			continue
@@ -236,7 +199,7 @@ func (c *ChatClient) recvServerLoop() {
 	}
 }
 
-func (c *ChatClient) recvServerData() (*ServerResponse, error) {
+func (c *ChatClient) recvServerData() (*proto.ServerResponse, error) {
 	select {
 	case data := <-c.serverRecvChan:
 		return data, nil
@@ -247,10 +210,10 @@ func (c *ChatClient) recvServerData() (*ServerResponse, error) {
 
 func (c *ChatClient) login(name string) error {
 	c.name = name
-	return c.sendCmdToServer("login " + name)
+	return c.sendCmdToServer(proto.Cmd(proto.CmdLogin, name))
 }
 
-func (c *ChatClient) doLogin(name string) error {
+func (c *ChatClient) DoLogin(name string) error {
 	if err := c.login(name); err != nil {
 		return fmt.Errorf("send cmd error: %+v", err)
 	}
@@ -271,10 +234,10 @@ func (c *ChatClient) doLogin(name string) error {
 
 func (c *ChatClient) logout() error {
 	c.name = ""
-	return c.sendCmdToServer(fmt.Sprintf("logout %d", c.id))
+	return c.sendCmdToServer(proto.Cmd(proto.CmdLogout, strconv.Itoa(c.id)))
 }
 
-func (c *ChatClient) doLogout() error {
+func (c *ChatClient) DoLogout() error {
 	if c.id == 0 {
 		return fmt.Errorf("not login")
 	}
@@ -293,10 +256,10 @@ func (c *ChatClient) doLogout() error {
 }
 
 func (c *ChatClient) getPeerClientAddr(peerID int) error {
-	return c.sendCmdToServer(fmt.Sprintf("get %d", peerID))
+	return c.sendCmdToServer(proto.Cmd(proto.CmdGet, strconv.Itoa(peerID)))
 }
 
-func (c *ChatClient) doGet(peerID int) error {
+func (c *ChatClient) DoGet(peerID int) error {
 	if c.id == 0 {
 		return fmt.Errorf("not login")
 	}
@@ -324,10 +287,10 @@ func (c *ChatClient) doGet(peerID int) error {
 }
 
 func (c *ChatClient) punch(targetID int) error {
-	return c.sendCmdToServer(fmt.Sprintf("punch %d %d", c.id, targetID))
+	return c.sendCmdToServer(proto.Cmd(proto.CmdPunch, strconv.Itoa(c.id), strconv.Itoa(targetID)))
 }
 
-func (c *ChatClient) doPunch(targetID int) error {
+func (c *ChatClient) DoPunch(targetID int) error {
 	addr, ok := c.targetsInfo[targetID]
 	if !ok {
 		return fmt.Errorf("not get peer %d addr now", targetID)
@@ -382,13 +345,13 @@ func (c *ChatClient) scan() {
 				fmt.Printf("bad login cmd\n")
 				continue
 			}
-			if err := c.doLogin(args[0]); err != nil {
+			if err := c.DoLogin(args[0]); err != nil {
 				fmt.Printf("exec cmd error: %+v\n", err)
 				continue
 			}
 			fmt.Printf("login success, ID: %d\n", c.id)
 		case "logout":
-			if err := c.doLogout(); err != nil {
+			if err := c.DoLogout(); err != nil {
 				fmt.Printf("exec cmd error: %+v\n", err)
 				continue
 			}
@@ -403,7 +366,7 @@ func (c *ChatClient) scan() {
 				fmt.Printf("%s: bad id format, must be int\n", args[0])
 				continue
 			}
-			if err := c.doGet(v); err != nil {
+			if err := c.DoGet(v); err != nil {
 				fmt.Printf("exec cmd error: %+v\n", err)
 				continue
 			}
@@ -418,7 +381,7 @@ func (c *ChatClient) scan() {
 				fmt.Printf("%s: bad id format, must be int\n", args[0])
 				continue
 			}
-			if err := c.doPunch(v); err != nil {
+			if err := c.DoPunch(v); err != nil {
 				fmt.Printf("exec cmd error: %+v\n", err)
 				continue
 			}

@@ -6,11 +6,8 @@ import (
 	"net"
 	"strconv"
 	"strings"
-)
 
-const (
-	SplitChar = " "
-	BadArg    = "FAIL bad args"
+	"udpdemo/proto"
 )
 
 type ClientInfo struct {
@@ -59,7 +56,7 @@ func (s *Server) ListenAndServer() {
 func (s *Server) handleData(c <-chan UDPMsg) {
 	for data := range c {
 		fmt.Printf("[%s] handle data now: %s\n", data.RemoteAddr, data.Data)
-		cmd, args := parseCmd(data.Data)
+		cmd, args := proto.ParseCmd(data.Data)
 		if err := s.execCmd(data.RemoteAddr, cmd, args...); err != nil {
 			fmt.Printf("exec cmd error: %+v\n", err)
 		}
@@ -88,47 +85,39 @@ func (s *Server) sendTo(addr *net.UDPAddr, data []byte) error {
 	return nil
 }
 
-func parseCmd(rawData []byte) (cmd string, args []string) {
-	segments := strings.Split(string(rawData), SplitChar)
-	fmt.Printf("segments: %v\n", segments)
-	cmd = segments[0]
-	args = segments[1:]
-	return
-}
-
 func (s *Server) execCmd(addr *net.UDPAddr, cmd string, args ...string) error {
 	switch strings.ToLower(cmd) {
-	case "login":
+	case proto.CmdLogin:
 		if len(args) != 1 {
-			return s.sendTo(addr, []byte("login "+BadArg))
+			return s.sendTo(addr, []byte(proto.BadArgsMsg(proto.CmdLogin)))
 		}
 		return s.login(addr, args[0])
-	case "logout":
+	case proto.CmdLogout:
 		if len(args) != 1 {
-			return s.sendTo(addr, []byte("logout "+BadArg))
+			return s.sendTo(addr, []byte(proto.BadArgsMsg(proto.CmdLogout)))
 		}
 		v, err := strconv.Atoi(args[0])
 		if err != nil {
-			return s.sendTo(addr, []byte("logout FAIL id must be int"))
+			return s.sendTo(addr, []byte(proto.FailureMsg(proto.CmdLogout, "id must be int")))
 		}
 		return s.logout(addr, v)
-	case "get":
+	case proto.CmdGet:
 		if len(args) != 1 {
-			return s.sendTo(addr, []byte("get "+BadArg))
+			return s.sendTo(addr, []byte(proto.BadArgsMsg(proto.CmdGet)))
 		}
 		v, err := strconv.Atoi(args[0])
 		if err != nil {
-			return s.sendTo(addr, []byte("get FAIL id must be int"))
+			return s.sendTo(addr, []byte(proto.FailureMsg(proto.CmdGet, "id must be int")))
 		}
 		return s.getUserInfo(addr, v)
-	case "punch":
+	case proto.CmdPunch:
 		if len(args) != 2 {
-			return s.sendTo(addr, []byte("punch "+BadArg))
+			return s.sendTo(addr, []byte(proto.BadArgsMsg(proto.CmdPunch)))
 		}
 		v1, err1 := strconv.Atoi(args[0])
 		v2, err2 := strconv.Atoi(args[1])
 		if err1 != nil || err2 != nil {
-			return s.sendTo(addr, []byte("punch FAIL id must be int"))
+			return s.sendTo(addr, []byte(proto.FailureMsg(proto.CmdPunch, "id must be int")))
 		}
 		return s.punch(addr, v1, v2)
 	}
@@ -138,7 +127,7 @@ func (s *Server) execCmd(addr *net.UDPAddr, cmd string, args ...string) error {
 // checkClient 检查id是否存在，true存在，false不存在，如果不存在，给addr发送不存在的消息
 func (s *Server) checkClient(addr *net.UDPAddr, cmd string, id int) (bool, error) {
 	if _, ok := s.Clients[id]; !ok {
-		err := s.sendTo(addr, []byte(fmt.Sprintf("%s FAIL %d is not exists", strings.ToLower(cmd), id)))
+		err := s.sendTo(addr, []byte(proto.FailureMsg(cmd, fmt.Sprintf("%d is not exists", id))))
 		return false, err
 	}
 	return true, nil
@@ -150,7 +139,7 @@ func (s *Server) checkClient(addr *net.UDPAddr, cmd string, id int) (bool, error
 func (s *Server) login(addr *net.UDPAddr, name string) error {
 	id := getID()
 	if _, ok := s.Clients[id]; ok {
-		return s.sendTo(addr, []byte(fmt.Sprintf("login FAIL %d has exists\n", id)))
+		return s.sendTo(addr, []byte(proto.FailureMsg(proto.CmdLogin, fmt.Sprintf("%d has exists\n", id))))
 	}
 
 	s.Clients[id] = ClientInfo{
@@ -160,14 +149,14 @@ func (s *Server) login(addr *net.UDPAddr, name string) error {
 	}
 	fmt.Printf("Clients: %+v\n", s.Clients)
 
-	return s.sendTo(addr, []byte(fmt.Sprintf("login OK %d", id)))
+	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdLogin, fmt.Sprintf("%d", id))))
 }
 
 // logout 登出
 // request：logout userID
 // response: logout [OK msg]/[FAIL msg]
 func (s *Server) logout(addr *net.UDPAddr, id int) error {
-	if ok, err := s.checkClient(addr, "logout", id); !ok {
+	if ok, err := s.checkClient(addr, proto.CmdLogout, id); !ok {
 		return err
 	}
 
@@ -175,18 +164,18 @@ func (s *Server) logout(addr *net.UDPAddr, id int) error {
 	delete(s.Clients, id)
 	fmt.Printf("Clients: %+v\n", s.Clients)
 
-	return s.sendTo(addr, []byte("logout OK"))
+	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdLogout, "")))
 }
 
 // getUserInfo 获取id的地址信息
 // request: get userID
 // response: get OK ip:port/FAIL msg
 func (s *Server) getUserInfo(addr *net.UDPAddr, id int) error {
-	if ok, err := s.checkClient(addr, "get", id); !ok {
+	if ok, err := s.checkClient(addr, proto.CmdGet, id); !ok {
 		return err
 	}
 
-	return s.sendTo(addr, []byte(fmt.Sprintf("LOGOUT OK %s", s.Clients[id].UDPAddr)))
+	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdLogout, s.Clients[id].UDPAddr.String())))
 }
 
 // punch 打洞消息，告诉targetID关于userID的地址信息，使得targetID可以发送打洞消息给userID
@@ -194,22 +183,22 @@ func (s *Server) getUserInfo(addr *net.UDPAddr, id int) error {
 // user response: punch OK/FAIL msg
 // target msg: getpunch ip:port
 func (s *Server) punch(addr *net.UDPAddr, userID, targetID int) error {
-	if ok, err := s.checkClient(addr, "punch", userID); !ok {
+	if ok, err := s.checkClient(addr, proto.CmdPunch, userID); !ok {
 		return err
 	}
-	if ok, err := s.checkClient(addr, "punch", targetID); !ok {
+	if ok, err := s.checkClient(addr, proto.CmdPunch, targetID); !ok {
 		return err
 	}
 
 	userInfo := s.Clients[userID]
 	targetInfo := s.Clients[targetID]
-	err := s.sendTo(targetInfo.UDPAddr, []byte(fmt.Sprintf("getpunch %s", userInfo.UDPAddr)))
+	err := s.sendTo(targetInfo.UDPAddr, []byte(proto.Cmd(proto.CmdGetPunch, userInfo.UDPAddr.String())))
 	if err != nil {
-		targetErr := s.sendTo(addr, []byte(fmt.Sprintf("punch FAIL send punch to %d fail", targetID)))
+		targetErr := s.sendTo(addr, []byte(proto.FailureMsg(proto.CmdPunch, fmt.Sprintf("send punch to %d fail", targetID))))
 		return fmt.Errorf("send punch data to target fail: %+v, send to target err: %+v", err, targetErr)
 	}
 
-	return s.sendTo(addr, []byte("punch OK"))
+	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdPunch, "")))
 }
 
 func main() {
