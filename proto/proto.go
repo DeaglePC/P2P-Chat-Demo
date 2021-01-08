@@ -2,6 +2,8 @@ package proto
 
 import (
 	"fmt"
+	"log"
+	"strconv"
 	"strings"
 )
 
@@ -18,7 +20,56 @@ const (
 
 	Success = "OK"
 	Failure = "FAIL"
+
+	PunchRequest = "#hello" // 主动
+	PunchReply   = "$world" // 回复
 )
+
+func IsPunchRequest(msg string) bool {
+	return strings.HasPrefix(msg, PunchRequest)
+}
+
+func IsPunchReply(msg string) bool {
+	return strings.HasPrefix(msg, PunchReply)
+}
+
+func BuildPunchReq(args ...string) string {
+	return fmt.Sprintf("%s#%s#", PunchRequest, strings.Join(args, "#"))
+}
+
+func BuildPunchReply(args ...string) string {
+	return fmt.Sprintf("%s$%s$", PunchReply, strings.Join(args, "$"))
+}
+
+func parsePunchInfo(msg string, isReq bool) (int, string, error) {
+	var splitChar string
+	if isReq {
+		splitChar = "#"
+	} else {
+		splitChar = "$"
+	}
+
+	msg = msg[1 : len(msg)-1]
+	segs := strings.Split(msg, splitChar)
+	log.Printf("~~~~~~~~~~~%s ~~~ %+v", msg, segs)
+	if len(segs) != 3 {
+		return 0, "", fmt.Errorf("bad req")
+	}
+	id, err := strconv.Atoi(segs[1])
+	log.Printf("@@@@@@@@ %d %+v --- %s", id, err, segs[1])
+	if err != nil {
+		return 0, "", err
+	}
+	return id, segs[2], nil
+}
+
+func ParsePunchReqInfo(msg string) (int, string, error) {
+	return parsePunchInfo(msg, true)
+}
+
+func ParsePunchReplyInfo(msg string) (int, string, error) {
+	return parsePunchInfo(msg, false)
+}
 
 func Cmd(cmd string, args ...string) string {
 	return strings.Join([]string{cmd, strings.Join(args, ArgSplitChar)}, CmdSplitChar)
@@ -93,4 +144,20 @@ func TryParsePunchMsg(b []byte) (bool, string) {
 		return true, segs[1]
 	}
 	return false, ""
+}
+
+func BuildChatMsg(srcID int, msg string) string {
+	return fmt.Sprintf("%d|%s", srcID, msg)
+}
+
+func ParseChatMsg(msg string) (int, string, error) {
+	segs := strings.SplitN(msg, "|", 2)
+	if len(segs) != 2 {
+		return 0, "", fmt.Errorf("split chat msg error")
+	}
+	id, err := strconv.Atoi(segs[0])
+	if err != nil {
+		return 0, "", fmt.Errorf("split chat msg atoi error: %v", err)
+	}
+	return id, segs[1], nil
 }

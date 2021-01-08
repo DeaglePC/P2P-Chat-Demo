@@ -14,15 +14,9 @@ import (
 	"udpdemo/proto"
 )
 
-const (
-	PunchMsg   = "#hello#" // 主动
-	PunchReply = "$world$" // 回复
-)
-
 var (
 	LocalAddr  = flag.String("laddr", "127.0.0.1:10001", "local addr: ip:port")
 	ServerAddr = flag.String("raddr", "127.0.0.1:10086", "server addr: ip:port")
-	//NickName   = flag.String("name", "tom", "name")
 )
 
 type PunchPeerInfo struct {
@@ -31,8 +25,15 @@ type PunchPeerInfo struct {
 }
 
 type PeerMsg struct {
+	ID   int
+	Info ClientInfo
+
 	UDPAddr net.Addr
 	Msg     string
+}
+
+type ClientInfo struct {
+	Name string
 }
 
 type ChatClient struct {
@@ -49,6 +50,8 @@ type ChatClient struct {
 	targetsInfo        *sync.Map // id -> addr
 	punchTargetsInfo   *sync.Map // 主动要打洞的地址信息和状态 map[string]*PunchPeerInfo
 	wantPunchPeersInfo *sync.Map // 被动打洞地址信息和状态
+
+	clients *sync.Map // ID -> ClientInfo
 
 	peerMsgChan chan *PeerMsg
 }
@@ -72,6 +75,7 @@ func (c *ChatClient) init() error {
 	c.punchTargetsInfo = new(sync.Map)
 	c.wantPunchPeersInfo = new(sync.Map)
 	c.peerMsgChan = make(chan *PeerMsg, 2)
+	c.clients = new(sync.Map)
 
 	return c.listen()
 }
@@ -106,32 +110,57 @@ func (c *ChatClient) handleClientMsg(addr net.Addr, data []byte) {
 	msg := string(data)
 	log.Printf("recv [%s] %s\n", addr, msg)
 
-	if msg == PunchReply {
+	if proto.IsPunchReply(msg) {
 		// 主动打洞，收到了回复，说明打洞成功了
-		log.Printf("[%s] udp hole punch success!\n", addr)
 		if val, ok := c.punchTargetsInfo.Load(addr.String()); ok {
 			val.(*PunchPeerInfo).IsDone = true
+			if id, name, err := proto.ParsePunchReplyInfo(msg); err != nil {
+				// 保存对方的个人信息
+				c.clients.Store(id, ClientInfo{Name: name})
+				log.Printf("save info: %d %s", id, name)
+			} else {
+				log.Printf("parse info err: %v", err)
+			}
+			log.Printf("[%s] 主动打洞，收到了回应\n", addr)
 		} else {
 			log.Printf("bad punch reply, addr %s not found\n", addr)
 		}
 		return
 	}
-	if msg == PunchMsg {
+	if proto.IsPunchRequest(msg) {
 		// 被动打洞，收到打洞者发来的消息，说明被打洞成功了
 		val, ok := c.wantPunchPeersInfo.Load(addr.String())
 		if !ok {
 			return
 		}
 		val.(*PunchPeerInfo).IsDone = true
-		log.Printf("被动打洞，收到了 %s hello\n", addr)
+		if id, name, err := proto.ParsePunchReqInfo(msg); err != nil {
+			c.clients.Store(id, ClientInfo{Name: name})
+			log.Printf("save info: %d %s", id, name)
+		} else {
+			log.Printf("parse info err: %v", err)
+		}
+		log.Printf("[%s] 被动打洞，收到了打洞请求\n", addr)
 		return
 	}
 
 	log.Printf("recv peer msg: <%s> %s", addr, msg)
+	id, msg, err := proto.ParseChatMsg(msg)
+	if err != nil {
+		log.Printf("bad char msg: %s", msg)
+		return
+	}
+	client, ok := c.clients.Load(id)
+	if !ok {
+		log.Printf("%d not found in clients", id)
+		return
+	}
 	// 普通消息
 	c.peerMsgChan <- &PeerMsg{
 		UDPAddr: addr,
 		Msg:     msg,
+		ID:      id,
+		Info:    client.(ClientInfo),
 	}
 	return
 }
@@ -176,7 +205,7 @@ func (c *ChatClient) recvPunchLoop() {
 				break
 			}
 			log.Printf("send punch reply to %s OK\n", addr)
-			if err := c.sendToPeer(addr, PunchReply); err != nil {
+			if err := c.sendToPeer(addr, proto.BuildPunchReply(strconv.Itoa(c.id), c.name)); err != nil {
 				log.Printf("send to peer error: %+v\n", err)
 				break
 			}
@@ -209,7 +238,7 @@ func (c *ChatClient) SendToPeerByID(id int, msg string) error {
 		return fmt.Errorf("%d not found", id)
 	}
 	if targetInfo, ok := c.punchTargetsInfo.Load(addrStr.(string)); ok {
-		return c.sendToPeer(targetInfo.(*PunchPeerInfo).UDPAddr, msg)
+		return c.sendToPeer(targetInfo.(*PunchPeerInfo).UDPAddr, proto.BuildChatMsg(c.id, msg))
 	} else {
 		return fmt.Errorf("not found %s in punchTargetsInfo", addrStr)
 	}
@@ -329,7 +358,7 @@ func (c *ChatClient) DoPunch(targetID int) error {
 			log.Printf("%d %s getPunchDone when send punch\n", targetID, addr)
 			break
 		}
-		if err := c.sendToPeer(v.(*PunchPeerInfo).UDPAddr, PunchMsg); err != nil {
+		if err := c.sendToPeer(v.(*PunchPeerInfo).UDPAddr, proto.BuildPunchReq(strconv.Itoa(c.id), c.name)); err != nil {
 			return fmt.Errorf("send to peer fail: %+v\n", err)
 		}
 		time.Sleep(time.Duration(100) * time.Millisecond)

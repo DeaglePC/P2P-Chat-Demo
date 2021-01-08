@@ -134,9 +134,9 @@ func displayPeerMsg() {
 			if chatUI == nil {
 				continue
 			}
-			log.Printf("================ %s", data.Msg)
+			log.Printf("================ [%d %s] %s", data.ID, data.Info.Name, data.Msg)
 			chatUI.UI.Update(func() {
-				chatUI.AppendMsg(data.UDPAddr.String(), data.Msg)
+				chatUI.AppendMsg(data.UDPAddr.String(), fmt.Sprintf("[%d %s] %s", data.ID, data.Info.Name, data.Msg))
 			})
 		}
 	}()
