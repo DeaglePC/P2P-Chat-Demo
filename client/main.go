@@ -36,6 +36,15 @@ func listenSamePort() {
 	}
 	defer ln.Close()
 
+	udpaddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:10086")
+	if err != nil {
+		panic(err)
+	}
+	_, err = ln.WriteTo([]byte("aaa"), udpaddr)
+	if err != nil {
+		panic(err)
+	}
+
 	b := make([]byte, 1024)
 	for {
 		n, addr, err := ln.ReadFrom(b)
@@ -51,20 +60,20 @@ func main() {
 	//srcAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}
 	//dstAddr := &net.UDPAddr{IP: ip, Port: 10086}
 	//conn, err := net.DialUDP("udp", srcAddr, dstAddr)
-	conn, err := reuseport.Dial("udp", "127.0.0.1:10001", "127.0.0.1:10086")
-	if err != nil {
-		fmt.Println(err)
-	}
-	defer conn.Close()
+	//conn, err := reuseport.Dial("udp", "127.0.0.1:10001", "127.0.0.1:10086")
+	//if err != nil {
+	//	fmt.Println(err)
+	//}
+	//defer conn.Close()
 
-	go recvServer(conn)
+	//go recvServer(conn)
 	go listenSamePort()
 
-	sendCmd(conn, "login tom")
-	sendCmd(conn, "get 1")
-	sendCmd(conn, "get 2")
-	sendCmd(conn, "punch 1 4")
-	sendCmd(conn, "logout 1")
+	//sendCmd(conn, "login tom")
+	//sendCmd(conn, "get 1")
+	//sendCmd(conn, "get 2")
+	//sendCmd(conn, "punch 1 4")
+	//sendCmd(conn, "logout 1")
 
 	a := bufio.NewScanner(os.Stdin)
 	a.Scan()

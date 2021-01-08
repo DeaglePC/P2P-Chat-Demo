@@ -22,7 +22,7 @@ type ChatUI struct {
 	hintBox   *tui.Box
 
 	root *tui.Box
-	ui   tui.UI
+	UI   tui.UI
 }
 
 func (c *ChatUI) Init() (err error) {
@@ -51,12 +51,12 @@ func (c *ChatUI) Init() (err error) {
 
 	c.root = tui.NewVBox(c.chatBox, c.hintBox)
 
-	c.ui, err = tui.New(c.root)
+	c.UI, err = tui.New(c.root)
 	if err != nil {
 		return err
 	}
 
-	c.ui.SetKeybinding("Esc", onQuit)
+	c.UI.SetKeybinding("Esc", onQuit)
 	return nil
 }
 
@@ -65,11 +65,11 @@ func (c *ChatUI) SetHint(text string) {
 }
 
 func (c *ChatUI) Quit() {
-	c.ui.Quit()
+	c.UI.Quit()
 }
 
 func (c *ChatUI) Run() error {
-	return c.ui.Run()
+	return c.UI.Run()
 }
 
 func (c *ChatUI) AppendMsg(prefix, text string) {
@@ -98,7 +98,6 @@ func onSubmit(e *tui.Entry) {
 	e.SetText("")
 
 	if text[0] != '#' {
-		chatUI.AppendMsg(*LocalAddr, text)
 		segs := strings.SplitN(text, " ", 2)
 		if len(segs) != 2 {
 			return
@@ -109,9 +108,12 @@ func onSubmit(e *tui.Entry) {
 		}
 		if err := p2pChatClient.SendToPeerByID(id, segs[1]); err != nil {
 			chatUI.SetHint(fmt.Sprintf("send fail: %+v", err))
+			return
 		}
+		chatUI.AppendMsg(*LocalAddr, text)
 		return
 	}
+
 	input := text[1:]
 	if len(input) == 0 {
 		chatUI.SetHint("bad input")
@@ -119,7 +121,6 @@ func onSubmit(e *tui.Entry) {
 		return
 	}
 	chatUI.SetHint(p2pChatClient.ExecInput(input))
-
 }
 
 func onQuit() {
@@ -133,7 +134,10 @@ func displayPeerMsg() {
 			if chatUI == nil {
 				continue
 			}
-			chatUI.AppendMsg(data.UDPAddr.String(), data.Msg)
+			log.Printf("================ %s", data.Msg)
+			chatUI.UI.Update(func() {
+				chatUI.AppendMsg(data.UDPAddr.String(), data.Msg)
+			})
 		}
 	}()
 }
