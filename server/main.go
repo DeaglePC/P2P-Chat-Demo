@@ -2,13 +2,22 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"strings"
 
 	"udpdemo/proto"
 )
+
+var Port = flag.Int("port", 10086, "listen port")
+
+func init() {
+	flag.Parse()
+	initLog()
+}
 
 type ClientInfo struct {
 	ID   int
@@ -44,7 +53,7 @@ func (s *Server) ListenAndServer() {
 	if err != nil {
 		return
 	}
-	fmt.Printf("Local: <%s> \n", s.listener.LocalAddr().String())
+	log.Printf("Local: <%s> \n", s.listener.LocalAddr().String())
 	defer s.listener.Close()
 
 	c := make(chan UDPMsg)
@@ -55,10 +64,10 @@ func (s *Server) ListenAndServer() {
 
 func (s *Server) handleData(c <-chan UDPMsg) {
 	for data := range c {
-		fmt.Printf("[%s] handle data now: %s\n", data.RemoteAddr, data.Data)
+		log.Printf("[%s] handle data now: %s\n", data.RemoteAddr, data.Data)
 		cmd, args := proto.ParseCmd(data.Data)
 		if err := s.execCmd(data.RemoteAddr, cmd, args...); err != nil {
-			fmt.Printf("exec cmd error: %+v\n", err)
+			log.Printf("exec cmd error: %+v\n", err)
 		}
 	}
 }
@@ -69,7 +78,7 @@ func (s *Server) recvData(c chan<- UDPMsg) {
 	for {
 		n, remoteAddr, err := s.listener.ReadFromUDP(data)
 		if err != nil {
-			fmt.Printf("error during read: %s", err)
+			log.Printf("error during read: %s", err)
 		}
 		c <- UDPMsg{
 			Data:       data[:n],
@@ -147,7 +156,7 @@ func (s *Server) login(addr *net.UDPAddr, name string) error {
 		Name:    name,
 		UDPAddr: addr,
 	}
-	fmt.Printf("Clients: %+v\n", s.Clients)
+	log.Printf("Clients: %+v\n", s.Clients)
 
 	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdLogin, fmt.Sprintf("%d", id))))
 }
@@ -160,9 +169,9 @@ func (s *Server) logout(addr *net.UDPAddr, id int) error {
 		return err
 	}
 
-	fmt.Printf("delete client: %+v\n", s.Clients[id])
+	log.Printf("delete client: %+v\n", s.Clients[id])
 	delete(s.Clients, id)
-	fmt.Printf("Clients: %+v\n", s.Clients)
+	log.Printf("Clients: %+v\n", s.Clients)
 
 	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdLogout, "")))
 }
@@ -175,7 +184,7 @@ func (s *Server) getUserInfo(addr *net.UDPAddr, id int) error {
 		return err
 	}
 
-	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdLogout, s.Clients[id].UDPAddr.String())))
+	return s.sendTo(addr, []byte(proto.SuccessMsg(proto.CmdGet, s.Clients[id].UDPAddr.String())))
 }
 
 // punch 打洞消息，告诉targetID关于userID的地址信息，使得targetID可以发送打洞消息给userID
@@ -203,7 +212,7 @@ func (s *Server) punch(addr *net.UDPAddr, userID, targetID int) error {
 
 func main() {
 	server := Server{
-		Addr:    &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10086},
+		Addr:    &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: *Port},
 		Clients: make(map[int]ClientInfo),
 	}
 	server.ListenAndServer()

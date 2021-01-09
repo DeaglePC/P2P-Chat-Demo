@@ -15,8 +15,10 @@ import (
 )
 
 var (
-	LocalAddr  = flag.String("laddr", "127.0.0.1:10001", "local addr: ip:port")
-	ServerAddr = flag.String("raddr", "127.0.0.1:10086", "server addr: ip:port")
+	LocalAddr         = flag.String("laddr", "127.0.0.1:10001", "local addr: ip:port")
+	ServerAddr        = flag.String("raddr", "127.0.0.1:10086", "server addr: ip:port")
+	PunchCnt          = flag.Int("n", 30, "打洞包数量")
+	RecvServerTimeout = flag.Int("t", 15, "收服务器的包超时时间，单位秒")
 )
 
 type PunchPeerInfo struct {
@@ -34,6 +36,7 @@ type PeerMsg struct {
 
 type ClientInfo struct {
 	Name string
+	Addr net.Addr
 }
 
 type ChatClient struct {
@@ -114,9 +117,9 @@ func (c *ChatClient) handleClientMsg(addr net.Addr, data []byte) {
 		// 主动打洞，收到了回复，说明打洞成功了
 		if val, ok := c.punchTargetsInfo.Load(addr.String()); ok {
 			val.(*PunchPeerInfo).IsDone = true
-			if id, name, err := proto.ParsePunchReplyInfo(msg); err != nil {
+			if id, name, err := proto.ParsePunchReplyInfo(msg); err == nil {
 				// 保存对方的个人信息
-				c.clients.Store(id, ClientInfo{Name: name})
+				c.clients.Store(id, ClientInfo{Name: name, Addr: addr})
 				log.Printf("save info: %d %s", id, name)
 			} else {
 				log.Printf("parse info err: %v", err)
@@ -134,8 +137,8 @@ func (c *ChatClient) handleClientMsg(addr net.Addr, data []byte) {
 			return
 		}
 		val.(*PunchPeerInfo).IsDone = true
-		if id, name, err := proto.ParsePunchReqInfo(msg); err != nil {
-			c.clients.Store(id, ClientInfo{Name: name})
+		if id, name, err := proto.ParsePunchReqInfo(msg); err == nil {
+			c.clients.Store(id, ClientInfo{Name: name, Addr: addr})
 			log.Printf("save info: %d %s", id, name)
 		} else {
 			log.Printf("parse info err: %v", err)
@@ -198,7 +201,7 @@ func (c *ChatClient) recvPunchLoop() {
 		addr := addr
 		c.wantPunchPeersInfo.Store(addr.String(), &PunchPeerInfo{UDPAddr: addr})
 		// 需要主动发送打洞消息
-		for i := 0; i < 10; i++ {
+		for i := 0; i < *PunchCnt; i++ {
 			v, _ := c.wantPunchPeersInfo.Load(addr.String())
 			if v.(*PunchPeerInfo).IsDone {
 				log.Printf("被动打洞还没发完10次就成功了 %s\n", addr)
@@ -218,7 +221,7 @@ func (c *ChatClient) recvServerData() (*proto.ServerResponse, error) {
 	select {
 	case data := <-c.serverRecvChan:
 		return data, nil
-	case <-time.After(3 * time.Second):
+	case <-time.After(time.Duration(*RecvServerTimeout) * time.Second):
 		return nil, fmt.Errorf("recv data timeout\n")
 	}
 }
@@ -233,15 +236,11 @@ func (c *ChatClient) sendToPeer(addr net.Addr, msg string) error {
 }
 
 func (c *ChatClient) SendToPeerByID(id int, msg string) error {
-	addrStr, ok := c.targetsInfo.Load(id)
+	client, ok := c.clients.Load(id)
 	if !ok {
 		return fmt.Errorf("%d not found", id)
 	}
-	if targetInfo, ok := c.punchTargetsInfo.Load(addrStr.(string)); ok {
-		return c.sendToPeer(targetInfo.(*PunchPeerInfo).UDPAddr, proto.BuildChatMsg(c.id, msg))
-	} else {
-		return fmt.Errorf("not found %s in punchTargetsInfo", addrStr)
-	}
+	return c.sendToPeer(client.(ClientInfo).Addr, proto.BuildChatMsg(c.id, msg))
 }
 
 func (c *ChatClient) sendCmdToServer(cmd string) error {
@@ -352,7 +351,7 @@ func (c *ChatClient) DoPunch(targetID int) error {
 	}
 
 	v, ok := c.punchTargetsInfo.Load(addr.(string))
-	for i := 0; i < 10; i++ {
+	for i := 0; i < *PunchCnt; i++ {
 		if ok && v.(*PunchPeerInfo).IsDone {
 			// 提前结束
 			log.Printf("%d %s getPunchDone when send punch\n", targetID, addr)
