@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	LocalAddr         = flag.String("laddr", "127.0.0.1:10001", "local addr: ip:port")
+	LocalAddr         = flag.String("laddr", "0.0.0.0:10001", "local addr: ip:port")
 	ServerAddr        = flag.String("raddr", "127.0.0.1:10086", "server addr: ip:port")
 	PunchCnt          = flag.Int("n", 30, "打洞包数量")
 	RecvServerTimeout = flag.Int("t", 15, "收服务器的包超时时间，单位秒")
@@ -40,8 +40,9 @@ type ClientInfo struct {
 }
 
 type ChatClient struct {
-	LocalAddr  *net.UDPAddr
-	ServerAddr *net.UDPAddr
+	onceHeartbeat sync.Once
+	LocalAddr     *net.UDPAddr
+	ServerAddr    *net.UDPAddr
 
 	id   int
 	name string
@@ -171,6 +172,12 @@ func (c *ChatClient) handleClientMsg(addr net.Addr, data []byte) {
 func (c *ChatClient) handleServerMsg(data []byte) error {
 	log.Printf("recv from server: %s\n", data)
 
+	// 心跳
+	if proto.IsHeartbeatReply(string(data)) {
+		log.Printf("get heartbeat reply: %s", data)
+		return nil
+	}
+
 	// 看看是不是打洞消息
 	isPunch, addr := proto.TryParsePunchMsg(data)
 	if isPunch {
@@ -252,6 +259,15 @@ func (c *ChatClient) sendCmdToServer(cmd string) error {
 	return nil
 }
 
+func (c *ChatClient) sendHeartbeatToServerLoop() {
+	for c.id != 0 { // has login
+		if err := c.sendCmdToServer(proto.BuildHeartbeatMsg(c.id)); err != nil {
+			log.Printf("send heartbeat fail: %+v", err)
+		}
+		time.Sleep(time.Duration(1) * time.Second)
+	}
+}
+
 func (c *ChatClient) login(name string) error {
 	c.name = name
 	return c.sendCmdToServer(proto.Cmd(proto.CmdLogin, name))
@@ -273,6 +289,9 @@ func (c *ChatClient) DoLogin(name string) error {
 		return fmt.Errorf("atoi fail, id must be int: %+v", err)
 	}
 	c.id = id
+	c.onceHeartbeat.Do(func() {
+		go c.sendHeartbeatToServerLoop()
+	})
 	return nil
 }
 
@@ -296,6 +315,7 @@ func (c *ChatClient) DoLogout() error {
 	if resp == nil || !resp.Result {
 		return fmt.Errorf("logout fail: %s, try again", resp.Data)
 	}
+	c.id = 0
 	return nil
 }
 
@@ -393,7 +413,7 @@ func (c *ChatClient) ExecInput(text string) string {
 		if err := c.DoLogout(); err != nil {
 			return fmt.Sprintf("exec cmd error: %+v", err)
 		}
-		fmt.Printf("logout success")
+		log.Printf("logout success")
 	case "get":
 		if len(args) != 1 {
 			return "bad get cmd"

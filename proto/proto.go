@@ -23,7 +23,39 @@ const (
 
 	PunchRequest = "#hello" // 主动
 	PunchReply   = "$world" // 回复
+
+	Heartbeat      = "#ping#"
+	HeartbeatReply = "$pong$"
 )
+
+func IsHeartbeatMsg(msg string) bool {
+	return strings.HasPrefix(msg, Heartbeat)
+}
+
+func BuildHeartbeatMsg(id int) string {
+	return fmt.Sprintf("%s%d#", Heartbeat, id)
+}
+
+func ParseHeartbeatMsg(msg string) int {
+	msg = msg[1 : len(msg)-1]
+	segs := strings.Split(msg, "#")
+	if len(segs) != 2 {
+		return 0
+	}
+	id, err := strconv.Atoi(segs[1])
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+func BuildHeartbeatReply(id int) string {
+	return fmt.Sprintf("%s%d$", HeartbeatReply, id)
+}
+
+func IsHeartbeatReply(msg string) bool {
+	return strings.HasPrefix(msg, HeartbeatReply)
+}
 
 func IsPunchRequest(msg string) bool {
 	return strings.HasPrefix(msg, PunchRequest)
