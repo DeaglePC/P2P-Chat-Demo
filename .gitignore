@@ -1,4 +1,6 @@
 .idea
 *.exe
 /p2pclient/p2pclient
-/p2pclient/p2p-chat-client.log
+*.log
+/bin/*
+!/**/.gitkeep

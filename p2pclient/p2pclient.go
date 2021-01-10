@@ -260,10 +260,14 @@ func (c *ChatClient) sendCmdToServer(cmd string) error {
 }
 
 func (c *ChatClient) sendHeartbeatToServerLoop() {
-	for c.id != 0 { // has login
-		if err := c.sendCmdToServer(proto.BuildHeartbeatMsg(c.id)); err != nil {
-			log.Printf("send heartbeat fail: %+v", err)
+	for {
+		// has login
+		if c.id != 0 {
+			if err := c.sendCmdToServer(proto.BuildHeartbeatMsg(c.id)); err != nil {
+				log.Printf("send heartbeat fail: %+v", err)
+			}
 		}
+
 		time.Sleep(time.Duration(1) * time.Second)
 	}
 }
